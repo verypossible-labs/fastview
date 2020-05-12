@@ -23,6 +23,7 @@ In QS, resources must have a unique ID but can have repeated names.  In order to
 4. The URL for a dashboard will remain immutable throughout updates, so long as it has the same ID.
 5. For any new dataset, the scheduled refreshing must be set in the console.
 6. After making any new data sources or datasets, whether through the CLI or the console, update their permissions so that other QS users/groups have access to them too.
+7. Before using FastView, make sure that your `.envrc` file is exporting the credentials for the AWS account you want to use.
 
 
 ## How to run commands
