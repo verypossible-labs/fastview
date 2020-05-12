@@ -1,0 +1,25 @@
+[tool.poetry]
+name = "fastview"
+version = "0.0.1"
+description = "A handy wrapper for the AWS QuickSight CLI."
+authors = ["Daniel Martin-Alarcon <daniel.ma@verypossible.com>"]
+
+[tool.poetry.scripts]
+fv = 'fastview.main:cli_entry_point'
+
+[tool.poetry.dependencies]
+python = "^3.7"
+click = "^7.1.1"
+
+[tool.poetry.dev-dependencies]
+pytest = "^5.4.1"
+boto3 = "^1.12.30"
+pip = "^20.0.2"
+black = "^19.10b0"
+isort = "^4.3.21"
+vulture = "^1.4"
+flake8 = "^3.7.9"
+
+[build-system]
+requires = ["poetry>=0.12"]
+build-backend = "poetry.masonry.api"
