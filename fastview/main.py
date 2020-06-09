@@ -1,7 +1,6 @@
 import json
 import os
 import pprint
-from time import sleep
 
 import boto3
 import click
@@ -596,6 +595,167 @@ def create_or_update_dashboard(
 
 
 @cli_entry_point.command()
+@click.argument("template_name")
+@click.argument("dashboard_name")
+@click.argument("owner_group_name")
+@click.argument("viewer_group_name")
+@click.argument("version_description")
+@click.argument("analysis_id")
+@click.argument("dataset_name_list", nargs=-1)
+def publish_analysis(
+    template_name,
+    dashboard_name,
+    owner_group_name,
+    viewer_group_name,
+    version_description,
+    analysis_id,
+    dataset_name_list,
+):
+    """Publishes changes directly from an analysis to a dashboard, creating a new template
+    or refreshing the last version.
+
+    Args:
+        template_name (str)
+        dashboard_name (str)
+        owner_group_name (str): The name of a Quicksight user or group that will be granted
+                                full read/write access to this dashboard.
+        viewer_group_name (str): The name of a Quicksight user or group that will be granted
+                                read-only access to this dashboard.
+        version_description (str): A description of what is new in this version.
+        analysis_id (str): You can get this from the URL of an analysis, after the last slash.
+        dataset_name_list (str): Name(s) of the dataset(s) that this analysis draws on.
+                                This argument takes an unlimited number of names.
+    """
+
+    template_list = qs_client.list_templates(AwsAccountId=aws_account_id)
+    matches = [
+        temp
+        for temp in template_list["TemplateSummaryList"]
+        if temp["Name"] == template_name
+    ]
+    dataset_arn_list = [
+        _get_dataset_description(name)["Arn"] for name in dataset_name_list
+    ]
+
+    dataset_references = [
+        {"DataSetPlaceholder": f"{name}_placeholder", "DataSetArn": arn,}
+        for name, arn in zip(dataset_name_list, dataset_arn_list)
+    ]
+
+    if len(matches) > 1:
+        print(f"There are multiple templates with name {template_name}")
+        print("This function can handle one at most.")
+        return
+
+    elif len(matches) == 0:
+        print(f"\nCreating template {template_name}\n")
+        response = qs_client.create_template(
+            AwsAccountId=aws_account_id,
+            TemplateId=template_name,
+            Name=template_name,
+            SourceEntity={
+                "SourceAnalysis": {
+                    "Arn": f"arn:aws:quicksight:{aws_region}:{aws_account_id}:analysis/{analysis_id}",
+                    "DataSetReferences": dataset_references,
+                }
+            },
+            VersionDescription=version_description,
+        )
+        template_version = 1
+        pprint.pp(response)
+        print(f"\nSuccessfully created {template_name}, Version {template_version}")
+
+    else:
+        description = _get_template_description(template_name, None)
+        previous_version = description["Version"]["VersionNumber"]
+
+        template_id = matches[0]["TemplateId"]
+        print(f"\nUpdating template {template_name}\n")
+        response = qs_client.update_template(
+            AwsAccountId=aws_account_id,
+            TemplateId=template_id,
+            Name=template_name,
+            SourceEntity={
+                "SourceAnalysis": {
+                    "Arn": f"arn:aws:quicksight:{aws_region}:{aws_account_id}:analysis/{analysis_id}",
+                    "DataSetReferences": dataset_references,
+                }
+            },
+            VersionDescription=version_description,
+        )
+        template_version = previous_version + 1
+        pprint.pp(response)
+        print(f"\nSuccessfully created {template_name}, Version {template_version}")
+
+    description = _get_template_description(template_name, int(template_version))
+    template_arn = description["Arn"]
+    owner_group_arn = _get_group_arn(owner_group_name)
+    viewer_group_arn = _get_group_arn(viewer_group_name)
+    dataset_name_list = [
+        dsc["Placeholder"].replace("_placeholder", "")
+        for dsc in description["Version"]["DataSetConfigurations"]
+    ]
+    dashboard_list = qs_client.list_dashboards(AwsAccountId=aws_account_id)
+    matches = [
+        ds
+        for ds in dashboard_list["DashboardSummaryList"]
+        if ds["Name"] == dashboard_name
+    ]
+    if len(matches) > 1:
+        print(f"\nThere are multiple dashboards with name {dashboard_name}:\n")
+        for x in matches:
+            print(x["Name"])
+            pprint.pp(x)
+            print()
+        return
+    elif len(matches) == 0:
+        print("\nCreating new dashboard...\n")
+        response = _create_dashboard(
+            dashboard_name,
+            dataset_name_list,
+            template_arn,
+            owner_group_arn,
+            viewer_group_arn,
+        )
+        pprint.pp(response)
+        print(f"\n\nSuccessfully created dashboard {dashboard_name}!\n")
+        print(">> Dashboard Permissions <<")
+        permission_response = qs_client.describe_dashboard_permissions(
+            AwsAccountId=aws_account_id, DashboardId=response["DashboardId"]
+        )
+        for perms in permission_response["Permissions"]:
+            print("\nPrincipal: ", perms["Principal"])
+            print("\nActions: ")
+            pprint.pp(perms["Actions"])
+    else:
+        dashboard_id = matches[0]["DashboardId"]
+        print("\nDeleting old dashboard...\n")
+        response = qs_client.delete_dashboard(
+            AwsAccountId=aws_account_id, DashboardId=dashboard_id,
+        )
+        pprint.pp(response)
+
+        print("\nCreating new dashboard...\n")
+        response = _create_dashboard(
+            dashboard_name,
+            dataset_name_list,
+            template_arn,
+            owner_group_arn,
+            viewer_group_arn,
+        )
+        pprint.pp(response)
+        print(f"\n\nSuccessfully created dashboard {dashboard_name}!\n")
+        print(">> Dashboard Permissions <<")
+        permission_response = qs_client.describe_dashboard_permissions(
+            AwsAccountId=aws_account_id, DashboardId=response["DashboardId"]
+        )
+        for perms in permission_response["Permissions"]:
+            print("\nPrincipal: ", perms["Principal"])
+            print("\nActions: ")
+            pprint.pp(perms["Actions"])
+
+
+@cli_entry_point.command()
 @click.argument("name")
 @click.argument("owner_group_name")
 def update_data_source_permissions(name, owner_group_name):
@@ -818,7 +978,7 @@ def _create_dashboard(
             },
         },
         DashboardPublishOptions={
-            "AdHocFilteringOption": {"AvailabilityStatus": "ENABLED"},
+            "AdHocFilteringOption": {"AvailabilityStatus": "DISABLED"},
             "ExportToCSVOption": {"AvailabilityStatus": "ENABLED"},
             "SheetControlsOption": {"VisibilityState": "EXPANDED"},
         },
