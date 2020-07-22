@@ -1,9 +1,11 @@
 import json
-import os
 import pprint
+from typing import List, Optional
 
 import boto3
-import click
+import typer
+
+app = typer.Typer()
 
 sts = boto3.client("sts")
 
@@ -14,40 +16,45 @@ aws_user = sts.get_caller_identity()["Arn"].split("/")[-1]
 qs_client = boto3.client("quicksight")
 
 
-@click.group()
-def cli_entry_point():
-    pass
+@app.callback()
+def callback():
+    """
+    This is a wrapper around the AWS CLI that adds default values and accesses credentials
+    from the current AWS user.
+    """
 
 
-@cli_entry_point.command()
+@app.command()
 def list_groups():
     group_list = qs_client.list_groups(AwsAccountId=aws_account_id, Namespace="default")
-    for x in group_list["GroupList"]:
+    for group in group_list["GroupList"]:
         member_list = qs_client.list_group_memberships(
-            GroupName=x["GroupName"], AwsAccountId=aws_account_id, Namespace="default",
+            GroupName=group["GroupName"],
+            AwsAccountId=aws_account_id,
+            Namespace="default",
         )["GroupMemberList"]
-        print("\nName: ", x["GroupName"])
-        print("Description: ", x["Description"])
+        print("\nName: ", group["GroupName"])
+        print("Description: ", group["Description"])
         print("Members:")
         for member in member_list:
             print("> ", member["MemberName"])
 
 
-@cli_entry_point.command()
+@app.command()
 def list_users():
     user_list = qs_client.list_users(AwsAccountId=aws_account_id, Namespace="default")
-    print("\nNames of all the users in this AWS account:\n")
-    for x in user_list["UserList"]:
-        print("UserName: ", x["UserName"])
-        print("Arn: ", x["Arn"])
+    print("\nNames and ARNs of all the users in this AWS account:\n")
+    for user in user_list["UserList"]:
+        print(user["UserName"])
+        print(user["Arn"])
         print()
 
 
-@cli_entry_point.command()
+@app.command()
 def list_data_sources():
     data_source_list = qs_client.list_data_sources(AwsAccountId=aws_account_id)
     print(
-        "\n[Name  :  ID] for each data source in this AWS account \
+        "\n[Name : ID] for each data source in this AWS account \
 (excluding AWS sample data sources and any of type AWS_IOT_ANALYTICS):\n"
     )
     exclusion_list = [
@@ -71,11 +78,11 @@ def list_data_sources():
         print(f"{name:<{max_len}} : {ds_id:<{max_len}}")
 
 
-@cli_entry_point.command()
+@app.command()
 def list_datasets():
     dataset_list = qs_client.list_data_sets(AwsAccountId=aws_account_id)
     print(
-        "\n[Names : ID] for each dataset in this AWS account (excluding AWS sample datasets):\n"
+        "\n[Name : ID] for each dataset in this AWS account (excluding AWS sample datasets):\n"
     )
     exclusion_list = [
         "Sales Pipeline",
@@ -98,27 +105,38 @@ def list_datasets():
         print(f"{name:<{max_len}} : {ds_id:<{max_len}}")
 
 
-@cli_entry_point.command()
+@app.command()
 def list_templates():
     template_list = qs_client.list_templates(AwsAccountId=aws_account_id)
-    print("\nAll templates in this AWS account:\n")
-    for x in template_list["TemplateSummaryList"]:
+    print("\nAll templates in this AWS account:")
+    summary_list = sorted(template_list["TemplateSummaryList"], key=lambda x: x["Name"])
+    for x in summary_list:
         print("\n\n>>> ", x["Name"])
         pprint.pp(x)
 
+    print("\n\nTemplates listed above:\n")
+    for x in summary_list:
+        print(x["Name"])
 
-@cli_entry_point.command()
+
+@app.command()
 def list_dashboards():
     dashboard_list = qs_client.list_dashboards(AwsAccountId=aws_account_id)
-    print("\nAll dashboards in this AWS account:\n")
-    for x in dashboard_list["DashboardSummaryList"]:
+    print("\nAll dashboards in this AWS account:")
+    summary_list = sorted(
+        dashboard_list["DashboardSummaryList"], key=lambda x: x["Name"]
+    )
+    for x in summary_list:
         print("\n\n>>> ", x["Name"])
         pprint.pp(x)
 
+    print("\n\nDashboards listed above:\n")
+    for x in summary_list:
+        print(x["Name"])
 
-@cli_entry_point.command()
-@click.argument("template_name")
-def list_template_versions(template_name):
+
+@app.command()
+def list_template_versions(template_name: str):
     template_list = qs_client.list_templates(AwsAccountId=aws_account_id)
     matches = [
         temp
@@ -139,24 +157,27 @@ def list_template_versions(template_name):
     response = qs_client.list_template_versions(
         AwsAccountId=aws_account_id, TemplateId=template_id,
     )
-    print()
-    for x in response["TemplateVersionSummaryList"]:
+    summary_list = sorted(
+        response["TemplateVersionSummaryList"], key=lambda x: x["VersionNumber"]
+    )
+    for x in summary_list:
         print()
         pprint.pp(x)
+    print("\n\n Versions listed above:\n")
+    for x in summary_list:
+        version = x["VersionNumber"]
+        description = x["Description"]
+        print(f"{version} -- {description}")
 
 
-@cli_entry_point.command()
-@click.argument("name")
-@click.option("-id", "--data_source_id", type=str)
-def describe_data_source(name, data_source_id):
-    """Describe data source, by name or (optionally) by ID.
-    This function ignores the name if the -id flag is used.
-
-    Arguments:
-        name {str} -- Must be unique
-        data_source_id {str}
+@app.command()
+def describe_data_source(
+    name: str,
+    data_source_id: str = typer.Option("", help="Search by ID, ignoring the name"),
+):
+    """Describe data source, by a unique name or (optionally) by ID.
     """
-    if data_source_id is None:
+    if data_source_id == "":
         description = _get_data_source_description(name)
     else:
         description = qs_client.describe_data_source(
@@ -172,22 +193,18 @@ def describe_data_source(name, data_source_id):
     )
     for perms in response["Permissions"]:
         print("\nPrincipal: ", perms["Principal"])
-        print("\nActions: ")
+        print("Actions: ")
         pprint.pp(perms["Actions"])
 
 
-@cli_entry_point.command()
-@click.argument("name")
-@click.option("-id", "--dataset_id", type=str)
-def describe_dataset(name, dataset_id):
+@app.command()
+def describe_dataset(
+    name: str,
+    dataset_id: str = typer.Option("", help="Search by ID, ignoring the name"),
+):
     """Describe dataset, by name or (optionally) by ID.
-    This function ignores the name if the -id flag is used.
-
-    Arguments:
-        name {str} -- Must be unique
-        dataset_id {str}
     """
-    if dataset_id is None:
+    if dataset_id == "":
         description = _get_dataset_description(name)
     else:
         description = qs_client.describe_data_set(
@@ -217,9 +234,8 @@ def describe_dataset(name, dataset_id):
         pprint.pp(perms["Actions"])
 
 
-@cli_entry_point.command()
-@click.argument("name")
-def describe_dashboard(name):
+@app.command()
+def describe_dashboard(name: str):
     description = _get_dashboard_description(name)
     print()
     pprint.pp(description)
@@ -234,10 +250,13 @@ def describe_dashboard(name):
         pprint.pp(perms["Actions"])
 
 
-@cli_entry_point.command()
-@click.argument("template_name")
-@click.option("-v", "--version", type=int)
-def describe_template(template_name, version):
+@app.command()
+def describe_template(
+    template_name: str,
+    version: Optional[int] = typer.Argument(
+        None, help="Describe a particular version, not the latest"
+    ),
+):
     description = _get_template_description(template_name, version)
     if version is None:
         latest_version = description["Version"]["VersionNumber"]
@@ -248,10 +267,8 @@ def describe_template(template_name, version):
     pprint.pp(description)
 
 
-@cli_entry_point.command()
-@click.argument("group_name")
-@click.argument("description")
-def create_group(group_name, description):
+@app.command()
+def create_group(group_name: str, description: str):
     print(f"\nCreating group {group_name}...\n")
     response = qs_client.create_group(
         GroupName=group_name,
@@ -262,14 +279,10 @@ def create_group(group_name, description):
     pprint.pp(response)
 
 
-@cli_entry_point.command()
-@click.argument("group_name")
-def create_group_of_all_users(group_name):
-    """Creates (or updates) a Quicksight group that contains all users in the AWS account.
+@app.command()
+def create_group_of_all_users(group_name: str):
+    """Creates a new Quicksight group with all users in the AWS account.
     Will fail if that group already exists.
-
-    Arguments:
-        group_name {str}
     """
     user_list = [
         x["UserName"]
@@ -299,24 +312,16 @@ def create_group_of_all_users(group_name):
     print("Done!")
 
 
-@cli_entry_point.command()
-@click.argument("data_source_name")
-@click.argument("owner_group_name")
-@click.argument("redshift_host")
-@click.argument("redshift_port")
-@click.argument("redshift_database_name")
-@click.argument("redshift_database_username")
-@click.argument("redshift_database_password")
-@click.argument("redshift_vpc_connection_arn")
+@app.command()
 def create_redshift_data_source(
-    data_source_name,
-    owner_group_name,
-    redshift_host,
-    redshift_port,
-    redshift_database_name,
-    redshift_database_username,
-    redshift_database_password,
-    redshift_vpc_connection_arn,
+    data_source_name: str,
+    owner_group_name: str,
+    redshift_host: str,
+    redshift_port: str,
+    redshift_database_name: str,
+    redshift_database_username: str,
+    redshift_database_password: str,
+    redshift_vpc_connection_arn: str,
 ):
 
     owner_group_arn = _get_group_arn(owner_group_name)
@@ -358,23 +363,25 @@ def create_redshift_data_source(
     pprint.pp(response)
 
 
-@cli_entry_point.command()
-@click.argument("dataset_name")
-@click.argument("owner_group_name")
-@click.argument("import_mode")
-@click.argument("physical_table_map")
-@click.argument("logical_table_map")
+@app.command()
 def create_dataset(
-    dataset_name, owner_group_name, import_mode, physical_table_map, logical_table_map,
+    dataset_name: str,
+    owner_group_name: str,
+    import_mode: str,
+    physical_table_map: str,
+    logical_table_map: str,
 ):
     """Creates dataset
 
-    Arguments:
-        dataset_name {str}
-        owner_group_name {str}
-        import_mode {'SPICE' | 'DIRECT_QUERY'} -- Indicates whether you want to import the data into SPICE or not.
-        physical_table_map {str} -- Output from the description of another dataset.
-        logical_table_map {str} -- Output from the description of another dataset.
+    dataset_name {str}
+
+    owner_group_name {str}
+
+    import_mode {'SPICE' | 'DIRECT_QUERY'} -- Indicates whether you want to import the data into SPICE or not.
+
+    physical_table_map {str} -- Output from the description of another dataset.
+
+    logical_table_map {str} -- Output from the description of another dataset.
     """
 
     owner_group_arn = _get_group_arn(owner_group_name)
@@ -408,10 +415,8 @@ def create_dataset(
     pprint.pp(response)
 
 
-@cli_entry_point.command()
-@click.argument("user_name")
-@click.argument("group_name")
-def add_member_to_group(user_name, group_name):
+@app.command()
+def add_member_to_group(user_name: str, group_name: str):
     response = qs_client.create_group_membership(
         MemberName=user_name,
         GroupName=group_name,
@@ -422,22 +427,23 @@ def add_member_to_group(user_name, group_name):
     pprint.pp(response)
 
 
-@cli_entry_point.command()
-@click.argument("template_name")
-@click.argument("analysis_id")
-@click.argument("dataset_name_list", nargs=-1)
-@click.argument("version_description")
+@app.command()
 def create_or_update_template(
-    template_name, analysis_id, dataset_name_list, version_description
+    template_name: str,
+    analysis_id: str,
+    dataset_name_list: List[str],
+    version_description: str,
 ):
     """Creates a new template, or updates an existing one if it already exists.
 
-    Arguments:
-        template_name {str} -- A name for the template.
-        analysis_id {str} -- You can get this from the URL of an analysis, after the last slash.
-        dataset_name_list {str} -- Name(s) of the dataset(s) that this analysis draws on.
-                                        This argument takes an unlimited number of names.
-        version_description {str} -- A description of what is new in this version.
+    template_name {str} -- A name for the template.
+
+    analysis_id {str} -- You can get this from the URL of an analysis, after the last slash.
+
+    dataset_name_list {str} -- Name(s) of the dataset(s) that this analysis draws on.
+    This argument takes an unlimited number of names.
+
+    version_description {str} -- A description of what is new in this version.
     """
 
     template_list = qs_client.list_templates(AwsAccountId=aws_account_id)
@@ -499,24 +505,21 @@ def create_or_update_template(
         print(f"\nSuccessfully created {template_name}, Version {previous_version + 1}")
 
 
-@cli_entry_point.command()
-@click.argument("dashboard_name")
-@click.argument("template_name")
-@click.argument("template_version")
-@click.argument("owner_group_name")
-@click.argument("viewer_group_name")
+@app.command()
 def create_or_update_dashboard(
-    dashboard_name,
-    template_name,
-    template_version,
-    owner_group_name,
-    viewer_group_name,
+    dashboard_id: str,
+    dashboard_name: str,
+    template_name: str,
+    template_version: str,
+    owner_group_name: str,
+    viewer_group_name: str,
 ):
-    """Create a dashboard from a template, inferring the name of its dataset.  Will only work
+    """Create a dashboard from a template.  Will only work
     for templates where the dataset placeholder name is the dataset name + "_placeholder", as
     is the case for any templates generated with this CLI.
 
     Arguments:
+        dashboard_id {str}
         dashboard_name {str}
         template_name {str}
         template_version {str}
@@ -549,7 +552,8 @@ def create_or_update_dashboard(
         return
     elif len(matches) == 0:
         print("\nCreating new dashboard...\n")
-        response = _create_dashboard(
+        response = _create_custom_access_dashboard(
+            dashboard_id,
             dashboard_name,
             dataset_name_list,
             template_arn,
@@ -575,7 +579,8 @@ def create_or_update_dashboard(
         pprint.pp(response)
 
         print("\nCreating new dashboard...\n")
-        response = _create_dashboard(
+        response = _create_custom_access_dashboard(
+            dashboard_id,
             dashboard_name,
             dataset_name_list,
             template_arn,
@@ -594,22 +599,15 @@ def create_or_update_dashboard(
             pprint.pp(perms["Actions"])
 
 
-@cli_entry_point.command()
-@click.argument("template_name")
-@click.argument("dashboard_name")
-@click.argument("owner_group_name")
-@click.argument("viewer_group_name")
-@click.argument("version_description")
-@click.argument("analysis_id")
-@click.argument("dataset_name_list", nargs=-1)
+@app.command()
 def publish_analysis(
-    template_name,
-    dashboard_name,
-    owner_group_name,
-    viewer_group_name,
-    version_description,
-    analysis_id,
-    dataset_name_list,
+    template_name: str,
+    dashboard_name: str,
+    dashboard_display_name: str,
+    workspace: str,
+    version_description: str,
+    analysis_id: str,
+    dataset_name_list: List[str],
 ):
     """Publishes changes directly from an analysis to a dashboard, creating a new template
     or refreshing the last version.
@@ -617,10 +615,7 @@ def publish_analysis(
     Args:
         template_name (str)
         dashboard_name (str)
-        owner_group_name (str): The name of a Quicksight user or group that will be granted
-                                full read/write access to this dashboard.
-        viewer_group_name (str): The name of a Quicksight user or group that will be granted
-                                read-only access to this dashboard.
+        dashboard_display_name (str): The visible name for the new dashboard.
         version_description (str): A description of what is new in this version.
         analysis_id (str): You can get this from the URL of an analysis, after the last slash.
         dataset_name_list (str): Name(s) of the dataset(s) that this analysis draws on.
@@ -642,6 +637,7 @@ def publish_analysis(
         for name, arn in zip(dataset_name_list, dataset_arn_list)
     ]
 
+    # Create or update template
     if len(matches) > 1:
         print(f"There are multiple templates with name {template_name}")
         print("This function can handle one at most.")
@@ -687,10 +683,9 @@ def publish_analysis(
         pprint.pp(response)
         print(f"\nSuccessfully created {template_name}, Version {template_version}")
 
+    # Get the dataset list from the template
     description = _get_template_description(template_name, int(template_version))
     template_arn = description["Arn"]
-    owner_group_arn = _get_group_arn(owner_group_name)
-    viewer_group_arn = _get_group_arn(viewer_group_name)
     dataset_name_list = [
         dsc["Placeholder"].replace("_placeholder", "")
         for dsc in description["Version"]["DataSetConfigurations"]
@@ -699,8 +694,9 @@ def publish_analysis(
     matches = [
         ds
         for ds in dashboard_list["DashboardSummaryList"]
-        if ds["Name"] == dashboard_name
+        if ds["DashboardId"] == dashboard_name
     ]
+
     if len(matches) > 1:
         print(f"\nThere are multiple dashboards with name {dashboard_name}:\n")
         for x in matches:
@@ -712,13 +708,13 @@ def publish_analysis(
         print("\nCreating new dashboard...\n")
         response = _create_dashboard(
             dashboard_name,
+            dashboard_display_name,
             dataset_name_list,
             template_arn,
-            owner_group_arn,
-            viewer_group_arn,
+            workspace,
         )
         pprint.pp(response)
-        print(f"\n\nSuccessfully created dashboard {dashboard_name}!\n")
+        print(f"\n\nSuccessfully created dashboard {dashboard_display_name}!\n")
         print(">> Dashboard Permissions <<")
         permission_response = qs_client.describe_dashboard_permissions(
             AwsAccountId=aws_account_id, DashboardId=response["DashboardId"]
@@ -738,13 +734,13 @@ def publish_analysis(
         print("\nCreating new dashboard...\n")
         response = _create_dashboard(
             dashboard_name,
+            dashboard_display_name,
             dataset_name_list,
             template_arn,
-            owner_group_arn,
-            viewer_group_arn,
+            workspace,
         )
         pprint.pp(response)
-        print(f"\n\nSuccessfully created dashboard {dashboard_name}!\n")
+        print(f"\n\nSuccessfully created dashboard {dashboard_display_name}!\n")
         print(">> Dashboard Permissions <<")
         permission_response = qs_client.describe_dashboard_permissions(
             AwsAccountId=aws_account_id, DashboardId=response["DashboardId"]
@@ -755,10 +751,8 @@ def publish_analysis(
             pprint.pp(perms["Actions"])
 
 
-@cli_entry_point.command()
-@click.argument("name")
-@click.argument("owner_group_name")
-def update_data_source_permissions(name, owner_group_name):
+@app.command()
+def update_data_source_permissions(name: str, owner_group_name: str):
     """Will grant full permissions for a data source to a given user/group,
     without altering any pre-existing permissions.
 
@@ -795,20 +789,14 @@ def update_data_source_permissions(name, owner_group_name):
     )
     for perms in response["Permissions"]:
         print("\nPrincipal: ", perms["Principal"])
-        print("\nActions: ")
+        print("Actions: ")
         pprint.pp(perms["Actions"])
 
 
-@cli_entry_point.command()
-@click.argument("name")
-@click.argument("owner_group_name")
-def update_dataset_permissions(name, owner_group_name):
+@app.command()
+def update_dataset_permissions(name: str, owner_group_name: str):
     """Will grant full permissions for a dataset to a given user/group,
     without altering any pre-existing permissions.
-
-    Arguments:
-        name {str} -- Name of the dataset to have its permissions updated
-        owner_group_name {str} -- Name of a Quicksight user or group
     """
     dataset_id = _get_dataset_description(name)["DataSetId"]
     owner_group_arn = _get_group_arn(owner_group_name)
@@ -843,13 +831,12 @@ def update_dataset_permissions(name, owner_group_name):
     )
     for perms in response["Permissions"]:
         print("\nPrincipal: ", perms["Principal"])
-        print("\nActions: ")
+        print("Actions: ")
         pprint.pp(perms["Actions"])
 
 
-@cli_entry_point.command()
-@click.argument("group_name")
-def delete_group(group_name):
+@app.command()
+def delete_group(group_name: str):
     print(f"\nDeleting group {group_name}...\n")
     response = qs_client.delete_group(
         GroupName=group_name, AwsAccountId=aws_account_id, Namespace="default"
@@ -857,10 +844,9 @@ def delete_group(group_name):
     pprint.pp(response)
 
 
-@cli_entry_point.command()
-@click.argument("data_source_id")
-@click.confirmation_option(prompt="Are you sure you want to delete this data source?")
-def delete_data_source(data_source_id):
+@app.command()
+def delete_data_source(data_source_id: str):
+    typer.confirm("Are you sure you want to delete this data source?", abort=True)
     print(f"\nDeleting data source with ID: {data_source_id}\n")
     response = qs_client.delete_data_source(
         AwsAccountId=aws_account_id, DataSourceId=data_source_id,
@@ -868,10 +854,9 @@ def delete_data_source(data_source_id):
     pprint.pp(response)
 
 
-@cli_entry_point.command()
-@click.argument("dashboard_name")
-@click.confirmation_option(prompt="Are you sure you want to delete this dashboard?")
-def delete_dashboard(dashboard_name):
+@app.command()
+def delete_dashboard(dashboard_name: str):
+    typer.confirm("Are you sure you want to delete this data source?", abort=True)
     dashboard_list = qs_client.list_dashboards(AwsAccountId=aws_account_id)
     matches = [
         ds
@@ -895,10 +880,9 @@ def delete_dashboard(dashboard_name):
     pprint.pp(response)
 
 
-@cli_entry_point.command()
-@click.argument("template_name")
-@click.confirmation_option(prompt="Are you sure you want to delete this template?")
-def delete_template(template_name):
+@app.command()
+def delete_template(template_name: str):
+    typer.confirm("Are you sure you want to delete this template?", abort=True)
     template_list = qs_client.list_templates(AwsAccountId=aws_account_id)
     matches = [
         temp
@@ -925,8 +909,101 @@ def delete_template(template_name):
 
 
 def _create_dashboard(
-    dashboard_name, dataset_name_list, template_arn, owner_group_arn, viewer_group_arn,
+    dashboard_id: str,
+    dashboard_name: str,
+    dataset_name_list: List[str],
+    template_arn: str,
+    workspace: str,
 ):
+    """Helper function for creating dashboards. Requires a group called "admins",
+    which will get read-write permissions
+
+    Args:
+        dashboard_id (str): Must be unique; will be part of the URL
+        dashboard_name (str): Will be displayed as the title
+        dataset_name_list (List[str]): All the datasets that went into the analysis
+        template_arn (str)
+        workspace {'stage'|'prod'}: Determines permissions
+    """
+    dataset_arn_list = [
+        _get_dataset_description(name)["Arn"] for name in dataset_name_list
+    ]
+    dataset_references = [
+        {"DataSetPlaceholder": f"{name}_placeholder", "DataSetArn": arn,}
+        for name, arn in zip(dataset_name_list, dataset_arn_list)
+    ]
+
+    admin_write_permission = [
+        {
+            "Principal": _get_group_arn("admins"),
+            "Actions": [
+                "quicksight:DescribeDashboard",
+                "quicksight:ListDashboardVersions",
+                "quicksight:UpdateDashboardPermissions",
+                "quicksight:QueryDashboard",
+                "quicksight:UpdateDashboard",
+                "quicksight:DeleteDashboard",
+                "quicksight:DescribeDashboardPermissions",
+                "quicksight:UpdateDashboardPublishedVersion",
+            ],
+        },
+    ]
+    general_read_permission = [
+        {
+            "Principal": f"arn:aws:quicksight:us-east-1:{aws_account_id}:namespace/default",
+            "Actions": [
+                "quicksight:DescribeDashboard",
+                "quicksight:ListDashboardVersions",
+                "quicksight:QueryDashboard",
+            ],
+        },
+    ]
+
+    if workspace == "stage":
+        permissions = admin_write_permission
+    elif workspace == "prod":
+        permissions = admin_write_permission + general_read_permission
+    else:
+        raise Exception("Workspace must be 'stage' or 'prod'.")
+
+    response = qs_client.create_dashboard(
+        AwsAccountId=aws_account_id,
+        DashboardId=dashboard_id,
+        Name=dashboard_name,
+        Permissions=permissions,
+        SourceEntity={
+            "SourceTemplate": {
+                "DataSetReferences": dataset_references,
+                "Arn": template_arn,
+            },
+        },
+        DashboardPublishOptions={
+            "AdHocFilteringOption": {"AvailabilityStatus": "DISABLED"},
+            "ExportToCSVOption": {"AvailabilityStatus": "ENABLED"},
+            "SheetControlsOption": {"VisibilityState": "EXPANDED"},
+        },
+    )
+    return response
+
+
+def _create_custom_access_dashboard(
+    dashboard_id,
+    dashboard_name,
+    dataset_name_list,
+    template_arn,
+    owner_group_arn,
+    viewer_group_arn,
+):
+    """Helper function for creating dashboards with non-default access.
+
+    Args:
+        dashboard_id (str): Must be unique; will be part of the URL
+        dashboard_name (str): Will be displayed as the title
+        dataset_name_list (List[str]): All the datasets that went into the analysis
+        template_arn (str)
+        owner_group_arn (str): Arn of a group that will get read-write access
+        viewer_group_arn (str): Arn of a group that will get read-only access
+    """
     dataset_arn_list = [
         _get_dataset_description(name)["Arn"] for name in dataset_name_list
     ]
@@ -968,7 +1045,7 @@ def _create_dashboard(
 
     response = qs_client.create_dashboard(
         AwsAccountId=aws_account_id,
-        DashboardId=dashboard_name,
+        DashboardId=dashboard_id,
         Name=dashboard_name,
         Permissions=permissions,
         SourceEntity={
@@ -1097,4 +1174,4 @@ def _get_group_arn(group_name):
 
 
 if __name__ == "__main__":
-    cli_entry_point()
+    app()

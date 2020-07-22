@@ -58,19 +58,17 @@ Create user groups in order to manage access to QS resources for the users of th
 
 ## How to publish a new dashboard to stage and prod
 1. Use the console to create a dataset.  Make different ones for `stage` and `prod`, and then use the `update_dataset_permissions` to give other QS users/groups access to the new datasets.
-2. Use the console to create an analysis for `stage`, and copy its unique ID.  It's the long number after `/analyses/` in the URL (e.g., `9504cub3-yr62-4f34-5e90-76c6827e070d`).  Note that if you're looking at a particular sheet, the analysis ID will appear before the string `/sheets/<sheetID>`
+2. Use the console to create an analysis for `stage`, and copy its unique ID.  It's the long number after `/analyses/` in the URL (e.g., `9504cub3-yr62-4f34-5e90-76c6827e070d`).  Note that if you're looking at a particular sheet, the analysis ID will appear before the string `/sheets/<sheetID>`.
 3. Take stock of current QS resources with the `list` and `describe` commands.
-4. Run `create_or_update_template` to make a new `stage` template from the dataset and analysis (using the analysis ID from before).
-5. Run `create_or_update_dashboard` to make a `stage` dashboard, assigning read-only privileges to `everyone` and read/write privileges to `admins`.
-6. Inspect the new `stage` dashboard in the console.
-7. Go back to the analysis, click on the pencil next to `Data set`, and replace the `stage` dataset with the `prod` one.  This shouldn't affect the analysis, provided that both datasets have the same variables.  QS will warn you of loss of undo/redo history, and might show an error screen.  Refresh the page and verify that the dataset was replaced with `prod`.
-8. Create a new `prod` template and dashboard for this analysis, starting with step 4 above.
+4. Run `publish_analysis`.
+5. Inspect the new `stage` dashboard in the console.
+6. Go back to the analysis, click on the pencil next to `Data set`, and replace the `stage` dataset with the `prod` one.  This shouldn't affect the analysis, provided that both datasets have the same variables.  QS will warn you of loss of undo/redo history, and might show an error screen.  Refresh the page and verify that the dataset was replaced with `prod`.
+7. Run `publish_analysis` for the `prod` dataset.
 
 
 ## How to update a dashboard
 1. Use the console to make any necessary updates to datasets or analyss.
-2. Run `create_or_update_template` to make a new version of the template from the right dataset and the current state of the analysis.
-3. Run `create_or_update_dashboard`.
+2. Run `publish_analysis`.
 
 
 ## How to duplicate an analysis/dashboard
